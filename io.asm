@@ -14,4 +14,4 @@
 
 The above code gets poked into the address starting at 16416 that was reserved in the BASIC programs 1st line of code which reserved 23 bytes to hold the port, value, and machine language routines.
 
-10 REM 1234567901234567890123
+10 REM 12345678901234567890123
