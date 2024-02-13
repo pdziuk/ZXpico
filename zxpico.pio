@@ -1,0 +1,182 @@
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+Based on the following but reworked for a ZX81 computer instead of an
+Apple II by Pat Dziuk
+
+MIT License
+
+Copyright (c) 2022 Oliver Schmidt (https://a2retro.de/)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+
+///////////////////////////////////////////////////////////////////////////////
+
+.define public  GPIO_ENBL        2  // IOREQ AND /M1
+.define public  GPIO_ADDR        3  // 8 pins
+.define public  GPIO_DATA        3  // 8 pins
+.define public  GPIO_WR         11
+
+.define public  GPIO_ADDR_OE    26  // TRX addr output enable
+.define public  GPIO_DATA_OE    27  // TRX data output enable
+.define public  GPIO_DATA_DIR   28  // TRX data direction
+
+.define public  SIZE_ADDR        9  // incl. WR
+.define public  SIZE_DATA        8
+
+.define public  SM_ADDR          0
+.define public  SM_READ          1  // from ZX81 perspective "IN (Port),value"
+.define public  SM_WRITE         2  // from ZX81 perspective "OUT value,(Port)"
+
+.define         IRQ_WRITE        4
+
+/*
+
+Implementation of the ZX81 peripheral bus protocol:
+
+- /IOREQ is put through an inverter and then combined with /M1 with an AND gate
+  to create the ENABLE signal which is active high now.  The /M1 filters out the interrupt
+  use of the address bus and /IOREQ.  See the Z80 manual for details.
+
+- WR is the /WR line, and can be used like a R/W with read active high and write active low
+
+- On the rising edge of ENBL, the lines A0-A8 and WR are sampled and pushed
+  into the 'enable' state machine RX FIFO.
+
+- In case of an ZX81 write cycle, the lines D0-D7 are sampled ~40ns later
+  and pushed into the 'write' state machine RX FIFO.
+
+- If a byte is pushed into the 'read' state machine TX FIFO, it is driven out
+  to the lines D0-D7 until the falling edge of ENBL.
+
+*/
+
+///////////////////////////////////////////////////////////////////////////////
+
+.program addr
+
+.wrap_target
+
+idle:
+    set pins, 0b01              // enable data bus transceiver
+
+    wait 0 gpio GPIO_ENBL       // wait for ENBL to fall
+
+    set pins, 0b10              // enable address bus transceiver
+
+    wait 1 gpio GPIO_ENBL[1]   // wait for ENBL to rise may need to wait for R/W to stabilize
+
+    in pins, SIZE_ADDR          // shift A0-A11 + WR into ISR
+
+    jmp pin idle                // jump to 'idle' if WR is high - a read
+    
+    irq IRQ_WRITE               // set 'write' IRQ
+
+.wrap
+
+% c-sdk {
+static inline void addr_program_set_config(pio_sm_config *c) {
+
+    // in_base:         GPIO_ADDR
+    sm_config_set_in_pins(c, GPIO_ADDR);
+
+    // shift_right:     false
+    // autopush:        true
+    // push_threshold:  SIZE_ADDR
+    sm_config_set_in_shift(c, false, true, SIZE_ADDR);
+
+    // set_base:        GPIO_ADDR_OE
+    // set_count:       2
+    sm_config_set_set_pins(c, GPIO_ADDR_OE, 2);
+
+    // pin:             GPIO_WR
+    sm_config_set_jmp_pin(c, GPIO_WR);
+}
+%}
+
+///////////////////////////////////////////////////////////////////////////////
+
+.program write
+
+.wrap_target
+
+    wait 1 irq IRQ_WRITE [5]    // wait for 'write' IRQ to be set and clear it
+                                // wait an extra 40ns to ensure data is ready
+
+    in pins, SIZE_DATA          // shift D0-D7 into ISR
+
+.wrap
+
+% c-sdk {
+static inline void write_program_set_config(pio_sm_config *c) {
+
+    // in_base:         GPIO_DATA
+    sm_config_set_in_pins(c, GPIO_DATA);
+
+    // shift_right:     false
+    // autopush:        true
+    // push_threshold:  SIZE_DATA
+    sm_config_set_in_shift(c, false, true, SIZE_DATA);
+}
+%}
+
+///////////////////////////////////////////////////////////////////////////////
+
+.program read
+
+.side_set 1 opt
+
+.wrap_target
+
+    pull block                  // pull data into OSR, block on empty FIFO
+
+    out pins, SIZE_DATA         // shift OSR out to D0-D7
+
+    mov osr, ~null side 1       // move 0xFFFFFFFF to OSR
+                                //   and enable data bus transceiver output
+    out pindirs, SIZE_DATA      // enable output of D0-D7
+
+    wait 0 gpio GPIO_ENBL       // wait for ENBL to rise
+
+    mov osr, null side 0        // move 0x00000000 to OSR
+                                //   and disable data bus transceiver output
+    out pindirs, SIZE_DATA      // disable output of D0-D7
+
+.wrap
+
+% c-sdk {
+static inline void read_program_set_config(pio_sm_config *c) {
+
+    // out_base:        GPIO_DATA
+    // out_count:       SIZE_DATA
+    sm_config_set_out_pins(c, GPIO_DATA, SIZE_DATA);
+
+    // shift_right:     true
+    // autopull:        false
+    // pull_threshold:  SIZE_DATA
+    sm_config_set_out_shift(c, true, false, SIZE_DATA);
+
+    // sideset_base:    GPIO_DATA_DIR
+    sm_config_set_sideset_pins(c, GPIO_DATA_DIR);
+}
+%}
+
+///////////////////////////////////////////////////////////////////////////////
