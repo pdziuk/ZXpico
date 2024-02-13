@@ -14,7 +14,7 @@ ZXPico has been modified to interface to a ZX81 or Timex Sinclair 1000 computer
 
 ### Theory Of Operation
 
-NOT(/IORQ) AND /M1) are combined to ENBL via an AND gate and INV gate. A0-A7 and D0-D7 are multiplexed to the same GPIOs. D0-D7 direction is controlled by GPIO.
+NOT(/IORQ) AND /M1 are combined to ENBL via an AND gate and NOT gate. A0-A7 and D0-D7 are multiplexed to the same GPIOs. D0-D7 direction is controlled by GPIO.
 
 ### GPIO Mapping
 
