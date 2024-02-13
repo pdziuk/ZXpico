@@ -11,6 +11,7 @@ ZXPico has been modified to interface to a ZX81 or Timex Sinclair 1000 computer
 
 ## ZXPico Hardware
 [https://github.com/pdziuk/ZXpico/blob/main/Schematic.jpg]
+https://github.com/pdziuk/ZXpico/blob/main/Breadboard.jpg
 
 ### Theory Of Operation
 
